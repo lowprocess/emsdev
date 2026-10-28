@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "emsdev"
+dynamic = ["version"]
+description = "The machine as the kicad2ems solvers see it: GPUs (CuPy, PyTorch), CPU threads, memory, compiled-core builds"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "GPL-3.0-or-later"}
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+]
+authors = [{ name = "Claude", email = "noreply@anthropic.com" }]
+dependencies = []                  # CuPy / PyTorch are probed, never required
+
+[project.optional-dependencies]
+build = ["pybind11>=2.10"]         # emsdev.build: the solvers' compiled cores
+test = ["pytest>=7"]
+
+[tool.setuptools.dynamic]
+version = {attr = "emsdev.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
