@@ -23,5 +23,7 @@ memory.available()                # bytes, capped by a cgroup limit
 `emsdev.build.build_core(__file__, 'x_core.cpp', arch_env='X_ARCH')` builds a package's `core/x_core.cpp` with
 pybind11 and OpenMP into `<package>/_core*.so` (`_core*.pyd` on Windows; the `build` extra installs pybind11). Linux and
 macOS use g++. Windows uses MSVC (Visual Studio 2022 or its Build Tools, with *Desktop development with C++*), found
-through setuptools, with `/openmp:llvm`; its OpenMP runtime, `libomp140.x86_64.dll`, is copied next to the module.
+through setuptools, with `/openmp:llvm`, or, without Visual Studio, MinGW-w64's g++ on the PATH (MSYS2's UCRT64
+toolchain); `EMSDEV_COMPILER=msvc` or `gcc` chooses. The compiler's runtime DLLs (`libomp140.x86_64.dll`, or
+MinGW's `libgomp-1.dll` and the rest) are copied next to the module, where Python finds them.
 The `*_ARCH` variable takes a g++ `-march=` (translated for MSVC: `x86-64-v3` is `/arch:AVX2`) or an MSVC `/arch:`.

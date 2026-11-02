@@ -126,3 +126,27 @@ def test_efficiency_classes():
     buf = rec(0, 1) * 8 + rec(2, 0, 32) + rec(0, 0) * 8
     assert efficiency_classes(buf) == [1] * 8 + [0] * 8
     assert efficiency_classes(b'') == []
+
+
+def test_compiler_choice(monkeypatch):
+    """EMSDEV_COMPILER chooses; on Windows MSVC when Visual Studio is there, else a MinGW g++ on the PATH."""
+    from emsdev import build
+    monkeypatch.setenv('EMSDEV_COMPILER', 'GCC')
+    assert build.compiler() == 'gcc'
+    monkeypatch.delenv('EMSDEV_COMPILER')
+    monkeypatch.setattr(build.sys, 'platform', 'win32')
+    monkeypatch.setattr(build, 'vs_installs', lambda: [])
+    monkeypatch.setattr(build.shutil, 'which', lambda n: r'C:\msys64\ucrt64\bin\g++.exe' if n == 'g++' else None)
+    assert build.compiler() == 'gcc'
+    monkeypatch.setattr(build, 'vs_installs', lambda: [r'C:\VS'])
+    assert build.compiler() == 'msvc'
+
+
+def test_mingw_command(tmp_path):
+    """MinGW-w64: no -fPIC, CPython's Windows defines, this Python's DLL linked, the C++ runtime static."""
+    pytest.importorskip('pybind11')
+    import sys
+    from emsdev.build import mingw_command
+    cmd = mingw_command(str(tmp_path), 'x_core.cpp', 'out.pyd', '-march=x86-64-v3')
+    assert '-fPIC' not in cmd and '-DMS_WIN64' in cmd and '-fopenmp' in cmd and '-static-libstdc++' in cmd
+    assert cmd[-3].endswith(f"python{sys.version_info.major}{sys.version_info.minor}.dll") and cmd[-2:] == ['-o', 'out.pyd']

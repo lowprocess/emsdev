@@ -4,10 +4,14 @@ the package's own modules (mom25d._core, gfdtd._core). A package's core/build.py
     from emsdev.build import build_core
     build_core(__file__, 'mom25d_core.cpp', arch_env='MOM25D_ARCH')
 
-Linux and macOS: g++ (-fopenmp). Windows: MSVC (Visual Studio 2022 or its Build Tools, "Desktop development with
-C++"), found by setuptools as for any extension module, with /openmp:llvm: the cores use OpenMP 3 (collapse, simd),
-which MSVC's default /openmp (2.0) rejects. That OpenMP's runtime, libomp140.x86_64.dll, is copied next to the
-module, where Python finds a module's DLLs.
+Linux and macOS: g++ (-fopenmp). Windows, either of:
+  MSVC (Visual Studio 2022 or its Build Tools, "Desktop development with C++"), found by setuptools as for any
+       extension module, with /openmp:llvm: the cores use OpenMP 3 (collapse, simd), which MSVC's default /openmp
+       (2.0) rejects. Its OpenMP runtime, libomp140.x86_64.dll, is copied next to the module.
+  GCC  MinGW-w64's g++ on the PATH (MSYS2's UCRT64 toolchain, or a standalone one), linked against this Python's
+       DLL; its runtime DLLs (libgomp, libstdc++, libgcc, winpthread) are copied next to the module.
+  MSVC when Visual Studio is installed, else g++; EMSDEV_COMPILER=msvc or gcc chooses. Python finds a module's
+  DLLs in the module's own folder, so the copies need no PATH.
 
 `arch_env` names the environment variable that replaces the default instruction set: -march=native for g++ (a
 portable build: -march=x86-64-v3), /arch:AVX2 for MSVC. A -march=x86-64-vN given to MSVC is translated."""
@@ -16,11 +20,21 @@ import glob, os, shutil, subprocess, sys, sysconfig
 MSVC_ARCH = {'native': '/arch:AVX2', 'x86-64': '', 'x86-64-v2': '', 'x86-64-v3': '/arch:AVX2',
              'x86-64-v4': '/arch:AVX512'}
 OMP_DLL = 'libomp140.x86_64.dll'
+MINGW_DLLS = ('libgomp-1.dll', 'libwinpthread-1.dll', 'libstdc++-6.dll', 'libgcc_s_seh-1.dll')
 
 
 def compiler():
-    """'msvc' on Windows, else 'gcc' (g++)."""
-    return 'msvc' if sys.platform == 'win32' else 'gcc'
+    """'msvc' or 'gcc': EMSDEV_COMPILER where set; on Windows MSVC when Visual Studio's C++ tools are installed
+    (or cl is on the PATH), else g++ (MinGW-w64) when it is on the PATH, else 'msvc' (whose error says what is
+    missing); elsewhere g++."""
+    want = os.environ.get('EMSDEV_COMPILER', '').strip().lower()
+    if want in ('msvc', 'gcc'):
+        return want
+    if sys.platform != 'win32':
+        return 'gcc'
+    if vs_installs() or shutil.which('cl'):
+        return 'msvc'
+    return 'gcc' if shutil.which('g++') else 'msvc'
 
 
 def command(here, source, out, arch='-march=native', includes=()):
@@ -29,6 +43,27 @@ def command(here, source, out, arch='-march=native', includes=()):
     return ['g++', '-O3', arch, '-fopenmp', '-shared', '-fPIC', '-std=c++17', '-Wno-attributes',
             '-I' + pybind11.get_include(), '-I' + sysconfig.get_paths()['include'], *('-I' + i for i in includes),
             os.path.join(here, source), '-o', out]
+
+
+def mingw_command(here, source, out, arch='-march=native', includes=(), gxx='g++'):
+    """The MinGW-w64 g++ command line for Windows: as on Linux (no -fPIC), with CPython's Windows defines and its
+    DLL linked directly (MinGW's ld reads a DLL's exports; no import library needed)."""
+    import pybind11
+    prefix = sys.base_prefix
+    dll = os.path.join(prefix, f"python{sys.version_info.major}{sys.version_info.minor}.dll")
+    return [gxx, '-O3', arch, '-fopenmp', '-shared', '-std=c++17', '-Wno-attributes', '-DMS_WIN64',
+            '-D_hypot=hypot', '-static-libgcc', '-static-libstdc++',
+            '-I' + pybind11.get_include(), '-I' + sysconfig.get_paths()['include'], *('-I' + i for i in includes),
+            os.path.join(here, source), dll, '-o', out]
+
+
+def mingw_dlls(gxx='g++'):
+    """The runtime DLLs a MinGW-w64 build needs at import, from g++'s own bin folder: [paths] of those there."""
+    exe = shutil.which(gxx)
+    if not exe:
+        return []
+    bindir = os.path.dirname(os.path.realpath(exe))
+    return [os.path.join(bindir, d) for d in MINGW_DLLS if os.path.isfile(os.path.join(bindir, d))]
 
 
 def msvc_arch(arch):
@@ -109,6 +144,12 @@ def build_core(build_py, source, arch_env=None, module='_core', includes_here=Fa
     includes = [here] if includes_here else []
     if compiler() == 'msvc':
         build_msvc(here, source, out, arch, includes)
+    elif sys.platform == 'win32':
+        cmd = mingw_command(here, source, out, arch, includes)
+        print(' '.join(cmd))
+        subprocess.check_call(cmd)
+        for dll in mingw_dlls():
+            shutil.copy2(dll, os.path.join(os.path.dirname(os.path.abspath(out)), os.path.basename(dll)))
     else:
         cmd = command(here, source, out, arch, includes)
         print(' '.join(cmd))
