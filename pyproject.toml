@@ -18,7 +18,8 @@ authors = [{ name = "Claude", email = "noreply@anthropic.com" }]
 dependencies = []                  # CuPy / PyTorch are probed, never required
 
 [project.optional-dependencies]
-build = ["pybind11>=2.10"]         # emsdev.build: the solvers' compiled cores
+build = ["pybind11>=2.10",          # emsdev.build: the solvers' compiled cores
+         "setuptools>=61; sys_platform == 'win32'"]   # Windows: setuptools finds MSVC
 test = ["pytest>=7"]
 
 [tool.setuptools.dynamic]

@@ -16,4 +16,4 @@ either:
 
 No dependencies: CuPy and PyTorch are imported only when asked about, and their absence is an answer.
 """
-__version__ = '261028-r1'
+__version__ = '261102-r1'

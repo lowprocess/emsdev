@@ -1,9 +1,34 @@
 """System memory: installed, and available to this process now."""
-import os
+import os, sys
+
+
+def windows_status():
+    """Windows: (installed, available) bytes from GlobalMemoryStatusEx; None elsewhere or where it fails."""
+    if sys.platform != 'win32':
+        return None
+    try:
+        import ctypes
+
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [('dwLength', ctypes.c_ulong), ('dwMemoryLoad', ctypes.c_ulong),
+                        ('ullTotalPhys', ctypes.c_ulonglong), ('ullAvailPhys', ctypes.c_ulonglong),
+                        ('ullTotalPageFile', ctypes.c_ulonglong), ('ullAvailPageFile', ctypes.c_ulonglong),
+                        ('ullTotalVirtual', ctypes.c_ulonglong), ('ullAvailVirtual', ctypes.c_ulonglong),
+                        ('ullAvailExtendedVirtual', ctypes.c_ulonglong)]
+        st = MEMORYSTATUSEX()
+        st.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+            return None
+        return float(st.ullTotalPhys), float(st.ullAvailPhys)
+    except (AttributeError, OSError, ImportError):
+        return None
 
 
 def total():
-    """Installed RAM in bytes (None where sysconf cannot tell)."""
+    """Installed RAM in bytes (None where neither sysconf nor Windows can tell)."""
+    win = windows_status()
+    if win:
+        return win[0]
     try:
         return float(os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES'))
     except (ValueError, OSError, AttributeError):
@@ -11,7 +36,11 @@ def total():
 
 
 def available():
-    """Bytes of memory available to this process: MemAvailable, capped by a cgroup limit."""
+    """Bytes of memory available to this process: MemAvailable, capped by a cgroup limit (Linux); what Windows
+    reports available; else psutil's, else 8 GB."""
+    win = windows_status()
+    if win:
+        return win[1]
     try:
         avail = next((int(l.split()[1]) * 1024 for l in open('/proc/meminfo') if l.startswith('MemAvailable:')), None)
     except OSError:
