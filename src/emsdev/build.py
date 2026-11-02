@@ -15,7 +15,7 @@ Linux and macOS: g++ (-fopenmp). Windows, either of:
 
 `arch_env` names the environment variable that replaces the default instruction set: -march=native for g++ (a
 portable build: -march=x86-64-v3), /arch:AVX2 for MSVC. A -march=x86-64-vN given to MSVC is translated."""
-import glob, os, shutil, subprocess, sys, sysconfig
+import glob, os, shutil, subprocess, sys, sysconfig, tempfile
 
 MSVC_ARCH = {'native': '/arch:AVX2', 'x86-64': '', 'x86-64-v2': '', 'x86-64-v3': '/arch:AVX2',
              'x86-64-v4': '/arch:AVX512'}
@@ -139,17 +139,25 @@ def build_msvc(here, source, out, arch='-march=native', includes=()):
     import pybind11
     from setuptools import Distribution, Extension
     name = os.path.basename(out)[:-len(sysconfig.get_config_var('EXT_SUFFIX'))]
-    ext = Extension(name, [os.path.join(here, source)], language='c++',
-                    include_dirs=[pybind11.get_include(), *includes], extra_compile_args=msvc_flags(arch))
+    # the source by its name, from its own folder, and the objects in a short temporary folder: setuptools names an
+    # object after its source's path under build_temp, and an absolute one there doubles the path past Windows'
+    # 260 characters (LNK1104) for a package deep in a venv
+    ext = Extension(name, [source], language='c++', include_dirs=[pybind11.get_include(), *includes],
+                    extra_compile_args=msvc_flags(arch))
     dist = Distribution({'name': name, 'ext_modules': [ext]})
     cmd = dist.get_command_obj('build_ext')
     cmd.build_lib = os.path.dirname(os.path.abspath(out))           # the module lands here, named for this Python
-    cmd.build_temp = os.path.join(here, 'build-msvc')
+    cmd.build_temp = tempfile.mkdtemp(prefix='emsdev-')
     cmd.inplace = False
     cmd.ensure_finalized()
     print('cl', ' '.join(msvc_flags(arch)), os.path.join(here, source))
-    cmd.run()
-    shutil.rmtree(cmd.build_temp, ignore_errors=True)
+    cwd = os.getcwd()
+    try:
+        os.chdir(here)
+        cmd.run()
+    finally:
+        os.chdir(cwd)
+        shutil.rmtree(cmd.build_temp, ignore_errors=True)
     cl = getattr(getattr(cmd, 'compiler', None), 'cc', None)       # the cl.exe setuptools used: its install first
     roots = [r for r in [vs_root(cl)] if r] + vs_installs()
     dll = find_omp_dll(list(dict.fromkeys(roots)))

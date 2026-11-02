@@ -91,7 +91,10 @@ def test_find_omp_dll(tmp_path):
         d.mkdir(parents=True)
         (d / OMP_DLL).write_bytes(b'')
     assert '14.40.33807' in find_omp_dll([str(tmp_path)])
-    assert find_omp_dll([str(tmp_path / 'none')]) in (None, __import__('shutil').which(OMP_DLL))
+    import os, shutil, sys
+    system = os.path.join(os.environ.get('SystemRoot', r'C:\\Windows'), 'System32', OMP_DLL)
+    assert find_omp_dll([str(tmp_path / 'none')]) in (None, shutil.which(OMP_DLL),           # none in that install:
+                                                      system if sys.platform == 'win32' else None)   # Windows' own
 
 
 def test_find_omp_dll_any_layout(tmp_path):
@@ -109,27 +112,35 @@ def test_find_omp_dll_any_layout(tmp_path):
 
 
 def test_build_through_setuptools(tmp_path, monkeypatch):
-    """The Windows route (setuptools' build_ext into the package folder, the module named for this Python), run
-    here with this platform's compiler and its flags in place of MSVC's."""
+    """The Windows route (setuptools' build_ext into the package folder, the module named for this Python): with MSVC
+    on Windows, elsewhere with this platform's compiler and its flags in place of MSVC's. The package sits deep in a
+    folder tree, as in a venv, which once took MSVC's object paths past Windows' 260 characters."""
     pytest.importorskip('pybind11')
     pytest.importorskip('setuptools')
     import shutil, subprocess, sys, sysconfig
-    if not (shutil.which('g++') or shutil.which('c++')):
-        pytest.skip('no C++ compiler')
     from emsdev import build
-    core = tmp_path / 'pkg' / 'core'
+    windows = sys.platform == 'win32'
+    if windows and not (build.vs_installs() or shutil.which('cl')):
+        pytest.skip('no Visual Studio')
+    if not windows and not (shutil.which('g++') or shutil.which('c++')):
+        pytest.skip('no C++ compiler')
+    deep = tmp_path / 'a-rather-long-folder-name-for-a-venv' / 'Lib' / 'site-packages' / 'a-package-with-a-long-name'
+    core = deep / 'pkg' / 'core'
     core.mkdir(parents=True)
     (core / 'x_core.cpp').write_text('#include <pybind11/pybind11.h>\nPYBIND11_MODULE(_core, m) '
                                      '{ m.def("two", [] { return 2; }); }\n', encoding='utf-8')
-    monkeypatch.setattr(build, 'msvc_flags', lambda arch: ['-O1', '-std=c++17'])
-    monkeypatch.setattr(build, 'find_omp_dll', lambda roots=None: None)
+    if not windows:
+        monkeypatch.setattr(build, 'msvc_flags', lambda arch: ['-O1', '-std=c++17'])
+        monkeypatch.setattr(build, 'find_omp_dll', lambda roots=None: None)
     monkeypatch.setattr(build, 'compiler', lambda: 'msvc')
+    cwd = os.getcwd()
     out = build.build_core(str(core / 'build.py'), 'x_core.cpp')
-    assert out == str((tmp_path / 'pkg' / ('_core' + sysconfig.get_config_var('EXT_SUFFIX'))).resolve())
-    r = subprocess.run([sys.executable, '-c', 'import _core; print(_core.two())'], cwd=tmp_path / 'pkg',
+    assert os.getcwd() == cwd                                         # the build's chdir undone
+    assert out == str((deep / 'pkg' / ('_core' + sysconfig.get_config_var('EXT_SUFFIX'))).resolve())
+    r = subprocess.run([sys.executable, '-c', 'import _core; print(_core.two())'], cwd=deep / 'pkg',
                        capture_output=True, text=True)
     assert r.stdout.strip() == '2', r.stderr
-    assert not (core / 'build-msvc').exists()
+    assert sorted(p.name for p in core.iterdir()) == ['x_core.cpp']  # no build folder left beside the source
 
 
 def test_efficiency_classes():
