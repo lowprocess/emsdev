@@ -99,14 +99,37 @@ def vs_installs():
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
+def _toolset_key(path):
+    """Sort key for a DLL path: its MSVC toolset version (the folder after MSVC), then the path."""
+    parts = path.replace('/', '\\').split('\\')
+    ver = next((parts[i + 1] for i, p in enumerate(parts[:-1]) if p.lower() == 'msvc'), '0')
+    return tuple(int(x) if x.isdigit() else 0 for x in ver.split('.')), path
+
+
+def vs_root(cl):
+    """The Visual Studio install a cl.exe belongs to (the folder above its VC folder), or None."""
+    parts = os.path.normpath(cl or '').split(os.sep)
+    low = [p.lower() for p in parts]
+    return os.sep.join(parts[:low.index('vc')]) if 'vc' in low[:-1] else None
+
+
 def find_omp_dll(installs=None):
-    """The path of MSVC's LLVM OpenMP runtime (libomp140.x86_64.dll): a Visual Studio install's redistributable
-    or tools folder, else the PATH; None where there is none."""
+    """The path of MSVC's LLVM OpenMP runtime (libomp140.x86_64.dll): anywhere under a Visual Studio install's VC
+    folder (its redistributable or tools folder; their layout differs between versions), the x64 release build,
+    newest toolset first; else Windows' own (System32, where the VC++ redistributable puts it) or the PATH; None
+    where there is none."""
     for root in vs_installs() if installs is None else installs:
-        hits = sorted(glob.glob(os.path.join(root, 'VC', 'Redist', 'MSVC', '*', 'x64', '*OpenMP.LLVM', OMP_DLL))) + \
-            sorted(glob.glob(os.path.join(root, 'VC', 'Tools', 'MSVC', '*', 'bin', 'Hostx64', 'x64', OMP_DLL)))
+        hits = []
+        vc = os.path.join(root, 'VC')
+        for folder, _, files in os.walk(vc):
+            sub = [p.lower() for p in os.path.relpath(folder, vc).replace('/', '\\').split('\\')]
+            if OMP_DLL in files and 'x86' not in sub and not any('debug' in p or 'arm' in p for p in sub):
+                hits.append(os.path.join(folder, OMP_DLL))
         if hits:
-            return hits[-1]                                         # the newest toolset
+            return max(hits, key=_toolset_key)
+    sysdir = os.path.join(os.environ.get('SystemRoot', r'C:\Windows'), 'System32', OMP_DLL)
+    if sys.platform == 'win32' and os.path.isfile(sysdir):
+        return sysdir
     return shutil.which(OMP_DLL)
 
 
@@ -127,12 +150,14 @@ def build_msvc(here, source, out, arch='-march=native', includes=()):
     print('cl', ' '.join(msvc_flags(arch)), os.path.join(here, source))
     cmd.run()
     shutil.rmtree(cmd.build_temp, ignore_errors=True)
-    dll = find_omp_dll()
+    cl = getattr(getattr(cmd, 'compiler', None), 'cc', None)       # the cl.exe setuptools used: its install first
+    roots = [r for r in [vs_root(cl)] if r] + vs_installs()
+    dll = find_omp_dll(list(dict.fromkeys(roots)))
     if dll:
         shutil.copy2(dll, os.path.join(os.path.dirname(os.path.abspath(out)), OMP_DLL))
     else:
-        print(f"warning: {OMP_DLL} (the OpenMP runtime of /openmp:llvm) was not found in Visual Studio: the module "
-              f"loads only where it is on the PATH (Visual Studio 2022's C++ tools have it)")
+        print(f"warning: {OMP_DLL} (the OpenMP runtime of /openmp:llvm) was not found under {', '.join(roots) or 'any '
+              f'Visual Studio'}, System32 or the PATH: the module loads only where Windows finds it")
 
 
 def build_core(build_py, source, arch_env=None, module='_core', includes_here=False):

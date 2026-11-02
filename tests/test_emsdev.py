@@ -94,6 +94,20 @@ def test_find_omp_dll(tmp_path):
     assert find_omp_dll([str(tmp_path / 'none')]) in (None, __import__('shutil').which(OMP_DLL))
 
 
+def test_find_omp_dll_any_layout(tmp_path):
+    """Wherever a Visual Studio version keeps it under VC: the x64 release build, never x86, ARM64 or debug."""
+    from emsdev.build import find_omp_dll, vs_root, OMP_DLL
+    vc = tmp_path / 'VS18' / 'VC'
+    for sub in ('Tools/MSVC/14.51.36231/bin/Hostx86/x64', 'Redist/MSVC/14.51.36231/debug_nonredist/x64/OpenMP',
+                'Redist/MSVC/14.51.36231/x86/OpenMP.LLVM', 'Redist/MSVC/14.51.36231/arm64/OpenMP.LLVM'):
+        (vc / sub).mkdir(parents=True)
+        (vc / sub / OMP_DLL).write_bytes(b'')
+    hit = find_omp_dll([str(tmp_path / 'VS18')])
+    assert hit == str(vc / 'Tools/MSVC/14.51.36231/bin/Hostx86/x64' / OMP_DLL)
+    cl = str(vc / 'Tools/MSVC/14.51.36231/bin/Hostx86/x64/cl.exe')
+    assert vs_root(cl) == str(tmp_path / 'VS18') and vs_root('cl.exe') is None and vs_root(None) is None
+
+
 def test_build_through_setuptools(tmp_path, monkeypatch):
     """The Windows route (setuptools' build_ext into the package folder, the module named for this Python), run
     here with this platform's compiler and its flags in place of MSVC's."""
@@ -108,7 +122,7 @@ def test_build_through_setuptools(tmp_path, monkeypatch):
     (core / 'x_core.cpp').write_text('#include <pybind11/pybind11.h>\nPYBIND11_MODULE(_core, m) '
                                      '{ m.def("two", [] { return 2; }); }\n', encoding='utf-8')
     monkeypatch.setattr(build, 'msvc_flags', lambda arch: ['-O1', '-std=c++17'])
-    monkeypatch.setattr(build, 'find_omp_dll', lambda: None)
+    monkeypatch.setattr(build, 'find_omp_dll', lambda roots=None: None)
     monkeypatch.setattr(build, 'compiler', lambda: 'msvc')
     out = build.build_core(str(core / 'build.py'), 'x_core.cpp')
     assert out == str((tmp_path / 'pkg' / ('_core' + sysconfig.get_config_var('EXT_SUFFIX'))).resolve())
