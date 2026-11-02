@@ -175,3 +175,19 @@ def test_mingw_command(tmp_path):
     cmd = mingw_command(str(tmp_path), 'x_core.cpp', 'out.pyd', '-march=x86-64-v3')
     assert '-fPIC' not in cmd and '-DMS_WIN64' in cmd and '-fopenmp' in cmd and '-static-libstdc++' in cmd
     assert cmd[-3].endswith(f"python{sys.version_info.major}{sys.version_info.minor}.dll") and cmd[-2:] == ['-o', 'out.pyd']
+
+
+def test_vs_installs_without_vswhere(tmp_path, monkeypatch):
+    """No vswhere: Visual Studio found by its vcvars64.bat under Program Files, the newest first (18 is 2026)."""
+    from emsdev.build import vs_installs
+    for pf, ver, ed in (('pf86', '2022', 'BuildTools'), ('pf', '18', 'BuildTools'), ('pf', '18', 'Community')):
+        b = tmp_path / pf / 'Microsoft Visual Studio' / ver / ed / 'VC' / 'Auxiliary' / 'Build'
+        b.mkdir(parents=True)
+        (b / 'vcvars64.bat').write_text('', encoding='utf-8')
+    (tmp_path / 'pf' / 'Microsoft Visual Studio' / 'Installer').mkdir()      # an installer folder, no vswhere in it
+    monkeypatch.setenv('ProgramFiles', str(tmp_path / 'pf'))
+    monkeypatch.setenv('ProgramFiles(x86)', str(tmp_path / 'pf86'))
+    roots = vs_installs()
+    assert [os.path.relpath(r, tmp_path).replace(os.sep, '/') for r in roots][-1] == \
+        'pf86/Microsoft Visual Studio/2022/BuildTools'
+    assert {os.path.basename(r) for r in roots[:2]} == {'BuildTools', 'Community'} and len(roots) == 3

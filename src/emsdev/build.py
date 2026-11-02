@@ -85,18 +85,43 @@ def msvc_flags(arch='-march=native'):
 
 
 def vs_installs():
-    """Visual Studio installations with the C++ tools (vswhere), newest first; [] where there is no vswhere."""
+    """Visual Studio installations with the C++ tools, newest first: vswhere's list, else (no vswhere, or a version it
+    does not report) those found by their vcvars64.bat under Program Files; [] where there is none."""
+    found = []
     base = os.environ.get('ProgramFiles(x86)') or os.environ.get('ProgramFiles') or r'C:\Program Files (x86)'
     vswhere = os.path.join(base, 'Microsoft Visual Studio', 'Installer', 'vswhere.exe')
-    if not os.path.isfile(vswhere):
-        return []
+    if os.path.isfile(vswhere):
+        try:
+            out = subprocess.run([vswhere, '-products', '*', '-sort', '-requires',
+                                  'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-property', 'installationPath'],
+                                 capture_output=True, text=True, timeout=30).stdout
+            found = [line.strip() for line in out.splitlines() if line.strip()]
+        except (OSError, subprocess.SubprocessError):
+            pass
+    scanned = []
+    for pf in dict.fromkeys(filter(None, (os.environ.get('ProgramFiles'), os.environ.get('ProgramFiles(x86)')))):
+        for bat in glob.glob(os.path.join(pf, 'Microsoft Visual Studio', '*', '*', 'VC', 'Auxiliary', 'Build',
+                                          'vcvars64.bat')):
+            scanned.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(bat)))))
+    year = lambda root: int(os.path.basename(os.path.dirname(root))) if os.path.basename(
+        os.path.dirname(root)).isdigit() else 0                     # 18 (2026), 2022, ...: the folder above the edition
+    scanned.sort(key=lambda r: (year(r) if year(r) > 100 else 2008 + year(r)), reverse=True)
+    norm = lambda p: os.path.normcase(os.path.normpath(p))
+    return found + [r for r in scanned if norm(r) not in {norm(f) for f in found}]
+
+
+def msvc_env(root):
+    """The environment Visual Studio's x64 developer prompt has (its vcvars64.bat run, then 'set'), as a dict; {} where
+    it fails. With it, cl, link and the SDK are on the PATH and their INCLUDE / LIB set."""
+    bat = os.path.join(root, 'VC', 'Auxiliary', 'Build', 'vcvars64.bat')
+    if not os.path.isfile(bat):
+        return {}
     try:
-        out = subprocess.run([vswhere, '-products', '*', '-sort', '-requires',
-                              'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-property', 'installationPath'],
-                             capture_output=True, text=True, timeout=30).stdout
+        r = subprocess.run(f'"{bat}" >nul 2>&1 && set', shell=True, capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.SubprocessError):
-        return []
-    return [line.strip() for line in out.splitlines() if line.strip()]
+        return {}
+    env = dict(line.split('=', 1) for line in r.stdout.splitlines() if '=' in line and not line.startswith('='))
+    return env if r.returncode == 0 and any(k.upper() == 'INCLUDE' for k in env) else {}
 
 
 def _toolset_key(path):
@@ -151,12 +176,22 @@ def build_msvc(here, source, out, arch='-march=native', includes=()):
     cmd.inplace = False
     cmd.ensure_finalized()
     print('cl', ' '.join(msvc_flags(arch)), os.path.join(here, source))
-    cwd = os.getcwd()
+    cwd, saved = os.getcwd(), dict(os.environ)
     try:
+        # cl from a Visual Studio we found ourselves (no vswhere, or a version setuptools does not know): its developer
+        # environment, which setuptools then uses as it is (DISTUTILS_USE_SDK)
+        roots = [] if shutil.which('cl') else vs_installs()
+        env = msvc_env(roots[0]) if roots else {}
+        if env:
+            os.environ.update(env)
+            os.environ.update(DISTUTILS_USE_SDK='1', MSSdk='1')
+            print(f"Visual Studio: {roots[0]} (its vcvars64.bat)")
         os.chdir(here)
         cmd.run()
     finally:
         os.chdir(cwd)
+        os.environ.clear()
+        os.environ.update(saved)
         shutil.rmtree(cmd.build_temp, ignore_errors=True)
     cl = getattr(getattr(cmd, 'compiler', None), 'cc', None)       # the cl.exe setuptools used: its install first
     roots = [r for r in [vs_root(cl)] if r] + vs_installs()
