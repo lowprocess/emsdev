@@ -106,7 +106,7 @@ def test_build_through_setuptools(tmp_path, monkeypatch):
     core = tmp_path / 'pkg' / 'core'
     core.mkdir(parents=True)
     (core / 'x_core.cpp').write_text('#include <pybind11/pybind11.h>\nPYBIND11_MODULE(_core, m) '
-                                     '{ m.def("two", [] { return 2; }); }\n')
+                                     '{ m.def("two", [] { return 2; }); }\n', encoding='utf-8')
     monkeypatch.setattr(build, 'msvc_flags', lambda arch: ['-O1', '-std=c++17'])
     monkeypatch.setattr(build, 'find_omp_dll', lambda: None)
     monkeypatch.setattr(build, 'compiler', lambda: 'msvc')
