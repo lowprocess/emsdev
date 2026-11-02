@@ -42,15 +42,15 @@ def available():
     if win:
         return win[1]
     try:
-        avail = next((int(l.split()[1]) * 1024 for l in open('/proc/meminfo') if l.startswith('MemAvailable:')), None)
+        avail = next((int(l.split()[1]) * 1024 for l in open('/proc/meminfo', encoding='utf-8') if l.startswith('MemAvailable:')), None)
     except OSError:
         avail = None
     for lim, use in (('/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory.current'),
                      ('/sys/fs/cgroup/memory/memory.limit_in_bytes', '/sys/fs/cgroup/memory/memory.usage_in_bytes')):
         try:
-            L = open(lim).read().strip()
+            L = open(lim, encoding='utf-8').read().strip()
             if L != 'max' and int(L) < 1 << 60:
-                free = int(L) - int(open(use).read())
+                free = int(L) - int(open(use, encoding='utf-8').read())
                 avail = free if avail is None else min(avail, free)
             break
         except (OSError, ValueError):

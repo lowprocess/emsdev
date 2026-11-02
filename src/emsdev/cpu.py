@@ -16,7 +16,7 @@ def core_threads():
         return max(1, (os.cpu_count() or 2) // 2)
     info = {}
     for c in cpus:
-        rd = lambda f: open(f"{base}/cpu{c}/{f}").read().strip()
+        rd = lambda f: open(f"{base}/cpu{c}/{f}", encoding='utf-8').read().strip()
         try:
             fmax = int(rd('cpufreq/cpuinfo_max_freq'))
         except (OSError, ValueError):
