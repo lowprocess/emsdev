@@ -6,7 +6,8 @@ backend is found, measured and picked one way, and kicad2ems reports what they w
 either:
 
     from emsdev import gpu, cpu, memory
-    gpu.devices()                   # [Device(index, name, library, api, total)]: the GPUs CuPy / PyTorch see
+    gpu.devices()                   # [Device(index, name, library, api, total)]: the GPUs CuPy and Vulkan see
+    vulkan.slang_device()           # the slangpy device the solvers' Vulkan backends run on
     gpu.cupy_device()               # the current CuPy device (raises gpu.Unavailable with the reason)
     gpu.preference('auto', 'MOM25D_GPU')    # a backend setting, the environment's override applied
     cpu.core_threads()              # the CPU cores' default thread count: one per fast physical core
@@ -14,6 +15,7 @@ either:
 
     python -m emsdev                 # all of it, one line each
 
-No dependencies: CuPy and PyTorch are imported only when asked about, and their absence is an answer.
+No dependencies: CuPy and slangpy are imported only when asked about, and their absence is an answer;
+Vulkan's GPUs are found through the system's Vulkan loader (ctypes).
 """
-__version__ = '261102-r1'
+__version__ = '261103-r1'

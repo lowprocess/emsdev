@@ -1,11 +1,11 @@
-"""emsdev without a GPU library and with stand-ins of CuPy and PyTorch (the calls the solvers rely on)."""
+"""emsdev without a GPU library and with a stand-in of CuPy (the calls the solvers rely on)."""
 import os
 import sys
 import types
 
 import pytest
 
-from emsdev import cpu, gpu, memory
+from emsdev import cpu, gpu, memory, vulkan
 
 
 def fake_cupy(n=2, hip=True, mem=(8e9, 16e9)):
@@ -24,8 +24,20 @@ def fake_cupy(n=2, hip=True, mem=(8e9, 16e9)):
 @pytest.fixture
 def no_gpu(monkeypatch):
     monkeypatch.setitem(sys.modules, 'cupy', None)
-    monkeypatch.setitem(sys.modules, 'torch', None)
+    monkeypatch.setitem(sys.modules, 'slangpy', None)
+    monkeypatch.setattr(vulkan, 'adapters', lambda include_cpu=False: [])
     return monkeypatch
+
+
+def fake_adapters(*specs):
+    """vulkan.adapters() as the loader would give them: (name, kind, GB) each, best first."""
+    feats = dict(bda=True, int64=True, float64=True, atomic_add_f32=True)
+    out = [vulkan.Adapter(0, n, k, 0x1002, 1 + i, gb * 1e9, driver='radv', api_version='1.4.0', budget=True,
+                          features=dict(feats), _order=i) for i, (n, k, gb) in enumerate(specs)]
+    out.sort(key=lambda a: (a.kind != 'discrete', -a.total))
+    for i, a in enumerate(out):
+        a.index = i
+    return out
 
 
 def test_memory_and_threads():
@@ -35,7 +47,8 @@ def test_memory_and_threads():
 
 def test_no_library_is_an_answer(no_gpu):
     devs, why = gpu.probe()
-    assert devs == [] and len(why) == 2 and why[0].startswith('cupy:') and why[1].startswith('torch:')
+    assert devs == [] and len(why) == 2 and why[0].startswith('cupy:')
+    assert why[1] == 'vulkan: no GPU (only CPU renderers)'
     with pytest.raises(gpu.Unavailable):
         gpu.cupy_device()
 
@@ -51,6 +64,52 @@ def test_cupy_devices(no_gpu):
     assert 'Fake 0 (ROCm/HIP, cupy 14.0, 15 GB)' == d.describe()
 
 
+def test_vulkan_devices(no_gpu):
+    """The Vulkan GPUs: a discrete one first, EMSDEV_VULKAN_DEVICE picks another; without slangpy, the reason."""
+    ads = fake_adapters(('Radeon 780M', 'integrated', 2), ('Radeon RX 9070', 'discrete', 16))
+    no_gpu.setattr(vulkan, 'adapters', lambda include_cpu=False: ads)
+    no_gpu.setattr(vulkan, '_free', lambda a: 12e9)
+    with pytest.raises(gpu.Unavailable, match='slangpy cannot be imported'):
+        gpu.vulkan_device()
+    no_gpu.setitem(sys.modules, 'slangpy', types.SimpleNamespace(__version__='0.43.1'))
+    d = gpu.vulkan_device()
+    assert (d.name, d.library, d.api, d.total, d.free()) == ('Radeon RX 9070', 'vulkan', 'Vulkan', 16e9, 12e9)
+    assert d.describe() == 'Radeon RX 9070 (Vulkan, slangpy 0.43.1, 15 GB)'
+    no_gpu.setenv('EMSDEV_VULKAN_DEVICE', '1')
+    assert gpu.vulkan_device().name == 'Radeon 780M'
+    no_gpu.setenv('EMSDEV_VULKAN_DEVICE', '2')
+    with pytest.raises(gpu.Unavailable, match='no GPU 2'):
+        gpu.vulkan_device()
+    no_gpu.delenv('EMSDEV_VULKAN_DEVICE')
+    assert [(d.index, d.library) for d in gpu.probe()[0]] == [(0, 'vulkan'), (1, 'vulkan')]
+    ads[0].features['float64'] = False                              # what a solver's kernels need, checked
+    assert gpu.vulkan_device(need=('bda',)).name == 'Radeon RX 9070'
+    with pytest.raises(gpu.Unavailable, match='lacks float64'):
+        gpu.vulkan_device(need=('bda', 'float64'))
+
+
+def test_vulkan_loader():
+    """The real loader, where there is one: an answer either way (adapters, or Unavailable with the reason)."""
+    try:
+        ads = vulkan.adapters(include_cpu=True)
+    except vulkan.Unavailable as e:
+        assert str(e).startswith('vulkan:')
+        return
+    for a in ads:
+        assert a.name and a.kind in ('discrete', 'integrated', 'virtual', 'cpu', 'other') and a.total >= 0
+        assert set(a.features) >= {'bda', 'int64', 'float64', 'atomic_add_f32'} or a.features == {}
+        assert a.free() is None or a.free() >= 0
+
+
+def test_auto_order(no_gpu):
+    """Vulkan first, except where CuPy runs on CUDA (NVIDIA)."""
+    assert gpu.auto_order() == ('vulkan', 'cupy')
+    no_gpu.setitem(sys.modules, 'cupy', fake_cupy(hip=True))
+    assert gpu.auto_order() == ('vulkan', 'cupy')
+    no_gpu.setitem(sys.modules, 'cupy', fake_cupy(hip=False))
+    assert gpu.auto_order() == ('cupy', 'vulkan')
+
+
 def test_cupy_without_devices(no_gpu):
     no_gpu.setitem(sys.modules, 'cupy', fake_cupy(n=0))
     with pytest.raises(gpu.Unavailable, match='no GPU device'):
@@ -60,7 +119,7 @@ def test_cupy_without_devices(no_gpu):
 def test_preference(monkeypatch):
     monkeypatch.delenv('X_GPU', raising=False)
     assert gpu.preference('auto', 'X_GPU') == 'auto' and gpu.preference(None) == 'auto'
-    assert gpu.preference('Torch', 'X_GPU') == 'torch' and gpu.preference('0') == 'off'
+    assert gpu.preference('Vulkan', 'X_GPU') == 'vulkan' and gpu.preference('0') == 'off'
     assert gpu.preference('gpu', aliases={'gpu': 'cupy'}) == 'cupy'
     monkeypatch.setenv('X_GPU', 'off')
     assert gpu.preference('cupy', 'X_GPU') == 'off'
