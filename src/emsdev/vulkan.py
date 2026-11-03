@@ -162,7 +162,7 @@ def _features(lib, phys):
     ctypes.c_int.from_buffer(atom, 0).value = 1000260000            # ..._SHADER_ATOMIC_FLOAT_FEATURES_EXT
     bda = ctypes.create_string_buffer(16 + 4 * 4)
     ctypes.c_int.from_buffer(bda, 0).value = 1000257000             # ..._BUFFER_DEVICE_ADDRESS_FEATURES
-    ctypes.c_void_p.from_buffer(bda, 8).value = ctypes.addressof(atom) if _has_ext(lib, phys, 'VK_EXT_shader_atomic_float') else None
+    ctypes.c_void_p.from_buffer(bda, 8).value = ctypes.addressof(atom) if 'VK_EXT_shader_atomic_float' in _extensions(lib, phys) else None
     f2 = ctypes.create_string_buffer(16 + 4 * 64)
     ctypes.c_int.from_buffer(f2, 0).value = 1000059000              # ..._FEATURES_2
     ctypes.c_void_p.from_buffer(f2, 8).value = ctypes.addressof(bda)
@@ -173,10 +173,6 @@ def _features(lib, phys):
     b = lambda buf, off: bool(ctypes.c_uint32.from_buffer(buf, off).value)
     return dict(bda=b(bda, 16), float64=b(f2, 16 + 4 * 39), int64=b(f2, 16 + 4 * 40),
                 atomic_add_f32=b(atom, 20))
-
-
-def _has_ext(lib, phys, name):
-    return name in _extensions(lib, phys)
 
 
 def _free(a):

@@ -230,8 +230,8 @@ def test_mingw_command(tmp_path):
     """MinGW-w64: no -fPIC, CPython's Windows defines, this Python's DLL linked, the C++ runtime static."""
     pytest.importorskip('pybind11')
     import sys
-    from emsdev.build import mingw_command
-    cmd = mingw_command(str(tmp_path), 'x_core.cpp', 'out.pyd', '-march=x86-64-v3')
+    from emsdev.build import command
+    cmd = command(str(tmp_path), 'x_core.cpp', 'out.pyd', '-march=x86-64-v3', mingw=True)
     assert '-fPIC' not in cmd and '-DMS_WIN64' in cmd and '-fopenmp' in cmd and '-static-libstdc++' in cmd
     assert cmd[-3].endswith(f"python{sys.version_info.major}{sys.version_info.minor}.dll") and cmd[-2:] == ['-o', 'out.pyd']
 

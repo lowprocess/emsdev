@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "emsdev"
 dynamic = ["version"]
-description = "The machine as the kicad2ems solvers see it: GPUs (CuPy, PyTorch), CPU threads, memory, compiled-core builds"
+description = "The machine as the kicad2ems solvers see it: GPUs (CuPy, Vulkan), CPU threads, memory, compiled-core builds"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "GPL-3.0-or-later"}
@@ -15,7 +15,7 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 authors = [{ name = "Claude", email = "noreply@anthropic.com" }]
-dependencies = []                  # CuPy / PyTorch are probed, never required
+dependencies = []                  # CuPy and slangpy are probed, never required
 
 [project.optional-dependencies]
 build = ["pybind11>=2.10",          # emsdev.build: the solvers' compiled cores

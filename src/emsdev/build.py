@@ -37,24 +37,18 @@ def compiler():
     return 'gcc' if shutil.which('g++') else 'msvc'
 
 
-def command(here, source, out, arch='-march=native', includes=()):
-    """The g++ command line that builds `source` (in `here`) into the extension module `out`."""
+def command(here, source, out, arch='-march=native', includes=(), mingw=False, gxx='g++'):
+    """The g++ command line that builds `source` (in `here`) into the extension module `out`. mingw: MinGW-w64's on
+    Windows: no -fPIC, CPython's Windows defines, the C++ runtime static, and this Python's DLL linked directly
+    (MinGW's ld reads a DLL's exports; no import library needed)."""
     import pybind11
-    return ['g++', '-O3', arch, '-fopenmp', '-shared', '-fPIC', '-std=c++17', '-Wno-attributes',
+    flags, dll = ['-fPIC'], []
+    if mingw:
+        flags = ['-DMS_WIN64', '-D_hypot=hypot', '-static-libgcc', '-static-libstdc++']
+        dll = [os.path.join(sys.base_prefix, f"python{sys.version_info.major}{sys.version_info.minor}.dll")]
+    return [gxx, '-O3', arch, '-fopenmp', '-shared', *flags, '-std=c++17', '-Wno-attributes',
             '-I' + pybind11.get_include(), '-I' + sysconfig.get_paths()['include'], *('-I' + i for i in includes),
-            os.path.join(here, source), '-o', out]
-
-
-def mingw_command(here, source, out, arch='-march=native', includes=(), gxx='g++'):
-    """The MinGW-w64 g++ command line for Windows: as on Linux (no -fPIC), with CPython's Windows defines and its
-    DLL linked directly (MinGW's ld reads a DLL's exports; no import library needed)."""
-    import pybind11
-    prefix = sys.base_prefix
-    dll = os.path.join(prefix, f"python{sys.version_info.major}{sys.version_info.minor}.dll")
-    return [gxx, '-O3', arch, '-fopenmp', '-shared', '-std=c++17', '-Wno-attributes', '-DMS_WIN64',
-            '-D_hypot=hypot', '-static-libgcc', '-static-libstdc++',
-            '-I' + pybind11.get_include(), '-I' + sysconfig.get_paths()['include'], *('-I' + i for i in includes),
-            os.path.join(here, source), dll, '-o', out]
+            os.path.join(here, source), *dll, '-o', out]
 
 
 def mingw_dlls(gxx='g++'):
@@ -212,15 +206,12 @@ def build_core(build_py, source, arch_env=None, module='_core', includes_here=Fa
     includes = [here] if includes_here else []
     if compiler() == 'msvc':
         build_msvc(here, source, out, arch, includes)
-    elif sys.platform == 'win32':
-        cmd = mingw_command(here, source, out, arch, includes)
-        print(' '.join(cmd))
-        subprocess.check_call(cmd)
-        for dll in mingw_dlls():
-            shutil.copy2(dll, os.path.join(os.path.dirname(os.path.abspath(out)), os.path.basename(dll)))
     else:
-        cmd = command(here, source, out, arch, includes)
+        mingw = sys.platform == 'win32'
+        cmd = command(here, source, out, arch, includes, mingw=mingw)
         print(' '.join(cmd))
         subprocess.check_call(cmd)
+        for dll in mingw_dlls() if mingw else ():
+            shutil.copy2(dll, os.path.join(os.path.dirname(os.path.abspath(out)), os.path.basename(dll)))
     print('built', os.path.abspath(out))
     return os.path.abspath(out)
