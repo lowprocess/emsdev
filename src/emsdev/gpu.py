@@ -1,17 +1,18 @@
 """
-The GPUs: which ones the array libraries (CuPy, PyTorch) see, what each is (name, CUDA or ROCm/HIP, memory), and
-how a solver's backend setting reads (preference). A solver keeps its own backends (mom25d's LU, gfdtd's update
+The GPUs: which ones CuPy and Vulkan (emsdev.vulkan) see, what each is (name, CUDA,
+ROCm/HIP or Vulkan, memory), and how a solver's backend setting reads (preference). A solver keeps its own backends (mom25d's LU, gfdtd's update
 kernels) and asks here which device they would run on.
 
     gpu.cupy_device()           Device of CuPy's current device, or raises Unavailable (no CuPy, no driver, none)
-    gpu.torch_device()          the same through PyTorch (its ROCm builds answer as torch.cuda)
+    gpu.vulkan_device()         the best Vulkan GPU (emsdev.vulkan; slangpy runs the solvers' kernels on it)
     gpu.devices()               every device of every library that has one: [Device]
     gpu.probe()                 (devices, why): why lists what failed, one reason per library
+    gpu.auto_order()            the order a solver's 'auto' tries them in: CuPy first on CUDA, else Vulkan first
 """
 import os
 from dataclasses import dataclass, field
 
-LIBRARIES = ('cupy', 'torch')               # the order 'auto' tries them in
+LIBRARIES = ('cupy', 'vulkan')
 OFF = {'0', 'false', 'no', 'off', 'none'}
 ON = {'1', 'on', 'true', 'yes', 'auto', ''}
 
@@ -24,8 +25,8 @@ class Unavailable(RuntimeError):
 class Device:
     index: int
     name: str
-    library: str                            # 'cupy' | 'torch'
-    api: str                                # 'ROCm/HIP' | 'CUDA'
+    library: str                            # 'cupy' | 'vulkan'
+    api: str                                # 'ROCm/HIP' | 'CUDA' | 'Vulkan'
     total: float = None                     # bytes of device memory
     version: str = ''                       # the library's version
     _free: object = field(default=None, repr=False, compare=False)
@@ -40,7 +41,8 @@ class Device:
 
     def describe(self):
         mem = f", {self.total / 2 ** 30:.0f} GB" if self.total else ''
-        return f"{self.name} ({self.api}, {self.library} {self.version}{mem})".replace(' )', ')')
+        lib = self.version if self.library == 'vulkan' else f"{self.library} {self.version}"   # vulkan: 'slangpy x.y'
+        return f"{self.name} ({self.api}, {lib}{mem})".replace(' )', ')').replace(', ,', ',')
 
     def as_dict(self):
         """The JSON form kicad2ems's sysinfo reports (GB)."""
@@ -81,41 +83,29 @@ def cupy_device(index=None):
                   total, str(getattr(cp, '__version__', '')), free)
 
 
-def torch_device(index=0):
-    """Device of PyTorch's device `index` (ROCm builds report through torch.cuda)."""
+def vulkan_device(index=None, need=()):
+    """Device of Vulkan adapter `index` (None: the best, or EMSDEV_VULKAN_DEVICE's): emsdev.vulkan.device; `need`:
+    the features a solver's kernels use (Unavailable where the GPU lacks one)."""
+    from . import vulkan
     try:
-        import torch
-        available = torch.cuda.is_available()
-    except Exception as e:
-        raise Unavailable(f"torch: {e}")
-    if not available:
-        raise Unavailable("torch: torch.cuda.is_available() is False")
-
-    def free():
-        torch.cuda.empty_cache()
-        return torch.cuda.mem_get_info()[0]
-    try:
-        total = float(torch.cuda.mem_get_info()[1])
-    except Exception:
-        total = None
-    return Device(index, _name(torch.cuda.get_device_name(index)), 'torch',
-                  'ROCm/HIP' if getattr(torch.version, 'hip', None) is not None else 'CUDA', total,
-                  str(getattr(torch, '__version__', '')), free)
+        return vulkan.device(index, need)
+    except vulkan.Unavailable as e:
+        raise Unavailable(str(e))
 
 
 def _count(library):
-    if library == 'cupy':
-        import cupy
-        return cupy.cuda.runtime.getDeviceCount()
-    import torch
-    return torch.cuda.device_count()
+    if library == 'vulkan':
+        from . import vulkan
+        return len(vulkan.adapters())
+    import cupy
+    return cupy.cuda.runtime.getDeviceCount()
 
 
 def probe(libraries=LIBRARIES):
     """(devices, why): every device of each library, and what kept a library from giving any."""
     out, why = [], []
     for lib in libraries:
-        one = cupy_device if lib == 'cupy' else torch_device
+        one = {'cupy': cupy_device, 'vulkan': vulkan_device}[lib]
         try:
             first = one(0)
         except Unavailable as e:
@@ -134,13 +124,27 @@ def probe(libraries=LIBRARIES):
     return out, why
 
 
+def auto_order():
+    """The libraries a solver's 'auto' tries, best first. Vulkan is the primary GPU API: one small wheel (slangpy)
+    on AMD, Intel and NVIDIA, Windows and Linux, where CuPy needs a CUDA or ROCm stack matched to its wheel (and has
+    no ROCm build for Windows). On an RX 7800 XT mom25d's Vulkan LU beat rocSOLVER and gfdtd's kernels matched
+    ROCm's, so CuPy on ROCm comes after Vulkan. CuPy on CUDA (NVIDIA: cuBLAS / cuSOLVER) stays first until Vulkan
+    has been measured against it there."""
+    try:
+        if not cupy_device().hip:
+            return ('cupy', 'vulkan')
+    except Unavailable:
+        pass
+    return ('vulkan', 'cupy')
+
+
 def devices(libraries=LIBRARIES):
     return probe(libraries)[0]
 
 
 def preference(pref='auto', env=None, aliases=None):
     """A backend setting as a solver reads it: 'off', 'auto' or a backend's name (lower case). The environment
-    variable `env`, when set, overrides pref; aliases maps other names onto backends (gfdtd: gpu -> cupy)."""
+    variable `env`, when set, overrides pref; aliases maps other names onto backends (gfdtd: vk -> vulkan)."""
     p = os.environ.get(env, '') if env else ''
     p = str(p or pref or 'auto').strip().lower()
     if p in OFF:
