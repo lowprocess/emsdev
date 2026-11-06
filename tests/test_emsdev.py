@@ -250,3 +250,39 @@ def test_vs_installs_without_vswhere(tmp_path, monkeypatch):
     assert [os.path.relpath(r, tmp_path).replace(os.sep, '/') for r in roots][-1] == \
         'pf86/Microsoft Visual Studio/2022/BuildTools'
     assert {os.path.basename(r) for r in roots[:2]} == {'BuildTools', 'Community'} and len(roots) == 3
+
+
+def test_cgroup_free_reads_the_process_own_cgroup_and_its_parents(tmp_path):
+    """A systemd scope's MemoryMax sits in the process's own cgroup, not the root; a parent slice's tighter limit
+    wins; the inactive page cache counts as free; no limit anywhere: None."""
+    from emsdev.memory import cgroup_free
+    proc = tmp_path / 'cgroup'
+    proc.write_text('0::/user.slice/app.slice/run-1.scope\n')
+    root = tmp_path / 'fs'
+    scope = root / 'user.slice' / 'app.slice' / 'run-1.scope'
+    scope.mkdir(parents=True)
+    for d in (root, root / 'user.slice', root / 'user.slice' / 'app.slice'):
+        (d / 'memory.max').write_text('max\n')
+        (d / 'memory.current').write_text('100\n')
+    (scope / 'memory.max').write_text(str(4 << 30))
+    (scope / 'memory.current').write_text(str(1 << 30))
+    (scope / 'memory.stat').write_text(f'anon 1\ninactive_file {256 << 20}\n')
+    assert cgroup_free(str(root), str(proc)) == (4 << 30) - (1 << 30) + (256 << 20)
+    (root / 'user.slice' / 'memory.max').write_text(str(2 << 30))          # a tighter slice above
+    (root / 'user.slice' / 'memory.current').write_text(str(1 << 30))
+    assert cgroup_free(str(root), str(proc)) == 1 << 30
+    for d in (scope, root / 'user.slice'):
+        (d / 'memory.max').write_text('max\n')
+    assert cgroup_free(str(root), str(proc)) is None
+
+
+def test_available_sees_a_systemd_scope_cap():
+    """Inside a 2 GB scope (where systemd-run is there to make one), available() is at most the cap."""
+    import shutil, subprocess, sys
+    if not shutil.which('systemd-run') or sys.platform != 'linux':
+        pytest.skip('no systemd-run')
+    r = subprocess.run(['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=2G', sys.executable, '-c',
+                        'from emsdev.memory import available; print(available())'], capture_output=True, text=True)
+    if r.returncode != 0:
+        pytest.skip(f'systemd-run --user failed: {r.stderr.strip()[:100]}')
+    assert float(r.stdout) <= 2 * 2 ** 30

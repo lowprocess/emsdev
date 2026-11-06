@@ -35,6 +35,55 @@ def total():
         return None
 
 
+def _read(path):
+    try:
+        with open(path, encoding='utf-8') as fh:
+            return fh.read().strip()
+    except OSError:
+        return None
+
+
+def cgroup_free(root='/sys/fs/cgroup', proc='/proc/self/cgroup'):
+    """Bytes this process's cgroup can still take: the least (limit - usage) over its own cgroup and every parent
+    (a slice above can cap it too), cgroup v2 or v1's memory controller; None where no cgroup limits it. The
+    process's own cgroup is the one /proc/self/cgroup names, not the root: a systemd scope's MemoryMax sits there
+    (inside a container, whose root is its own cgroup, the two are the same)."""
+    lines = (_read(proc) or '').splitlines()
+    v2 = next((l.split(':', 2)[2] for l in lines if l.startswith('0::')), None)
+    v1 = next((l.split(':', 2)[2] for l in lines if ':memory:' in l or l.split(':')[1:2] == ['memory']), None)
+    cands = []
+    if v2 is not None:
+        cands.append((root, v2, 'memory.max', 'memory.current', 'inactive_file'))
+    if v1 is not None:
+        cands.append((root + '/memory', v1, 'memory.limit_in_bytes', 'memory.usage_in_bytes', 'total_inactive_file'))
+    for base, path, lim, use, cache in cands:
+        free, found = None, False
+        parts = [x for x in path.split('/') if x]
+        for k in range(len(parts), -1, -1):                     # own cgroup, then each parent up to the root
+            d = '/'.join([base] + parts[:k])
+            L, U = _read(f'{d}/{lim}'), _read(f'{d}/{use}')
+            if L is None:
+                continue
+            found = True
+            if L == 'max' or U is None:
+                continue
+            try:
+                Li, Ui = int(L), int(U)
+            except ValueError:
+                continue
+            if Li < 1 << 60:
+                # usage counts the page cache: its inactive part is reclaimed before the limit bites
+                stat = dict(l.split()[:2] for l in (_read(f'{d}/memory.stat') or '').splitlines() if len(l.split()) >= 2)
+                try:
+                    Ui -= int(stat.get(cache, 0))
+                except ValueError:
+                    pass
+                free = Li - Ui if free is None else min(free, Li - Ui)
+        if found:
+            return None if free is None else max(0, free)
+    return None
+
+
 def available():
     """Bytes of memory available to this process: MemAvailable, capped by a cgroup limit (Linux); what Windows
     reports available; else psutil's, else 8 GB."""
@@ -45,16 +94,9 @@ def available():
         avail = next((int(l.split()[1]) * 1024 for l in open('/proc/meminfo', encoding='utf-8') if l.startswith('MemAvailable:')), None)
     except OSError:
         avail = None
-    for lim, use in (('/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory.current'),
-                     ('/sys/fs/cgroup/memory/memory.limit_in_bytes', '/sys/fs/cgroup/memory/memory.usage_in_bytes')):
-        try:
-            L = open(lim, encoding='utf-8').read().strip()
-            if L != 'max' and int(L) < 1 << 60:
-                free = int(L) - int(open(use, encoding='utf-8').read())
-                avail = free if avail is None else min(avail, free)
-            break
-        except (OSError, ValueError):
-            continue
+    free = cgroup_free()
+    if free is not None:
+        avail = free if avail is None else min(avail, free)
     if avail is None:
         try:
             import psutil
