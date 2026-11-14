@@ -218,6 +218,9 @@ def pick(index=None):
         raise Unavailable("vulkan: no GPU (only CPU renderers)")
     if index is None:
         env = os.environ.get('EMSDEV_VULKAN_DEVICE', '').strip()
+        if not env.isdigit() and ads[0].kind == 'integrated':      # its "device" memory is the system's: a solver
+            raise Unavailable(f"vulkan: only an integrated GPU ({ads[0].name}), whose memory is the system's: "  # had
+                              f"EMSDEV_VULKAN_DEVICE=0 to run on it anyway")       # counted it twice
         index = int(env) if env.isdigit() else 0
     if not 0 <= index < len(ads):
         raise Unavailable(f"vulkan: no GPU {index} (there are {len(ads)})")
