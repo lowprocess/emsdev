@@ -15,7 +15,9 @@ either:
 
     python -m emsdev                 # all of it, one line each
 
-No dependencies: CuPy and slangpy are imported only when asked about, and their absence is an answer;
-Vulkan's GPUs are found through the system's Vulkan loader (ctypes).
+    from emsdev.afs import adaptive_sweep   # the S-parameter sweep mom25d and pcbqs share (numpy)
+
+No dependencies (emsdev.afs's numpy aside): CuPy and slangpy are imported only when asked about, and their
+absence is an answer; Vulkan's GPUs are found through the system's Vulkan loader (ctypes).
 """
-__version__ = '261103-r1'
+__version__ = '261114'
