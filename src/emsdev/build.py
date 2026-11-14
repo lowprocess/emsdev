@@ -193,8 +193,9 @@ def build_msvc(here, source, out, arch='-march=native', includes=()):
     if dll:
         shutil.copy2(dll, os.path.join(os.path.dirname(os.path.abspath(out)), OMP_DLL))
     else:
-        print(f"warning: {OMP_DLL} (the OpenMP runtime of /openmp:llvm) was not found under {', '.join(roots) or 'any '
-              f'Visual Studio'}, System32 or the PATH: the module loads only where Windows finds it")
+        where = ', '.join(roots) or 'any Visual Studio'           # (outside the f-string: Python 3.10 and 3.11)
+        print(f"warning: {OMP_DLL} (the OpenMP runtime of /openmp:llvm) was not found under {where}, System32 or the "
+              f"PATH: the module loads only where Windows finds it")
 
 
 def build_core(build_py, source, arch_env=None, module='_core', includes_here=False):
