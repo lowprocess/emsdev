@@ -20,4 +20,4 @@ either:
 No dependencies (emsdev.afs's numpy aside): CuPy and slangpy are imported only when asked about, and their
 absence is an answer; Vulkan's GPUs are found through the system's Vulkan loader (ctypes).
 """
-__version__ = '0.3.0'
+__version__ = '0.3.1'

@@ -183,7 +183,9 @@ def _free(a):
 
 
 def adapters(include_cpu=False):
-    """The Vulkan GPUs the loader finds, best first (CPU renderers left out unless include_cpu)."""
+    """The Vulkan GPUs the loader finds, best first (CPU renderers left out unless include_cpu, or
+    EMSDEV_VULKAN_CPU=1: CI runs the solvers' Vulkan paths on lavapipe that way, as no GPU is there)."""
+    include_cpu = include_cpu or os.environ.get('EMSDEV_VULKAN_CPU', '').strip() == '1'
     lib, inst = _instance()
     out = []
     for order, phys in enumerate(_physical_devices(lib, inst)):
@@ -359,10 +361,13 @@ class HostBuffer:
         types = _memory_types(lib, phys)
         want = [HOST_VISIBLE | HOST_COHERENT | HOST_CACHED, HOST_VISIBLE | HOST_COHERENT]
         idx = None
-        for w in want:
-            for i, (flags, _) in enumerate(types):
-                if req.memoryTypeBits >> i & 1 and flags & w == w and not flags & DEVICE_LOCAL:
-                    idx = i
+        for local in (False, True):                             # the host's own memory first; a device whose
+            for w in want:                                      # memory is all host-visible (lavapipe, an
+                for i, (flags, _) in enumerate(types):          # integrated GPU) has only device-local types
+                    if req.memoryTypeBits >> i & 1 and flags & w == w and bool(flags & DEVICE_LOCAL) == local:
+                        idx = i
+                        break
+                if idx is not None:
                     break
             if idx is not None:
                 break
